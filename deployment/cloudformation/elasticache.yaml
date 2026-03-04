@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ElastiCache Redis Cluster for CTFd (Optional)'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: List of private subnet IDs
+  
+  VPCCIDR:
+    Type: String
+    Description: VPC CIDR Block
+  
+  ElastiCacheClusterInstances:
+    Type: Number
+    Default: 1
+    Description: Number of instances in ElastiCache cluster
+  
+  ElastiCacheClusterInstanceType:
+    Type: String
+    Default: cache.t2.micro
+    Description: Instance type for ElastiCache cluster
+  
+  ElastiCacheClusterPort:
+    Type: Number
+    Default: 6379
+    Description: Port to connect to ElastiCache cluster
+  
+  ElastiCacheEncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: Encryption key ARN for ElastiCache (empty for default)
+
+Resources:
+  # ElastiCache Subnet Group
+  ElastiCacheSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Cache subnet group for CTFd
+      SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cache-subnet'
+
+  # ElastiCache Parameter Group
+  ElastiCacheParameterGroup:
+    Type: AWS::ElastiCache::ParameterGroup
+    Properties:
+      Description: Cache parameter group for CTFd
+      CacheParameterGroupFamily: redis7
+      Properties:
+        maxmemory-policy: allkeys-lru
+
+  # ElastiCache Security Group
+  ElastiCacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: elasticache_security_group
+      GroupDescription: ElastiCache security group
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ElastiCacheClusterPort
+          ToPort: !Ref ElastiCacheClusterPort
+          CidrIp: !Ref VPCCIDR
+          Description: Allow ElastiCache port from VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !Ref VPCCIDR
+          Description: Allow outbound traffic
+      Tags:
+        - Key: Name
+          Value: elasticache_security_group
+
+  # ElastiCache Replication Group
+  ElastiCacheReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub '${AppName}-cache-cluster'
+      Description: Cache replication group for CTFd
+      NodeGroupConfiguration:
+        - NodeGroupId: '0001'
+          InstanceType: !Ref ElastiCacheClusterInstanceType
+          ReplicaCount: !Sub '${ElastiCacheClusterInstances - 1}'
+      NumCacheClusters: !Ref ElastiCacheClusterInstances
+      Port: !Ref ElastiCacheClusterPort
+      ParameterGroupName: !Ref ElastiCacheParameterGroup
+      SubnetGroupName: !Ref ElastiCacheSubnetGroup
+      AutomaticFailoverEnabled: true
+      SecurityGroupIds:
+        - !Ref ElastiCacheSecurityGroup
+      AtRestEncryptionEnabled: !If
+        - HasEncryptionKey
+        - true
+        - false
+      KmsKeyId: !If
+        - HasEncryptionKey
+        - !Ref ElastiCacheEncryptionKeyARN
+        - !Ref AWS::NoValue
+      Engine: redis
+      EngineVersion: '7.0'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cache-cluster'
+
+Conditions:
+  HasEncryptionKey: !Not [!Equals [!Ref ElastiCacheEncryptionKeyARN, '']]
+
+Outputs:
+  ElastiCacheEndpoint:
+    Description: ElastiCache Primary Endpoint
+    Value: !GetAtt ElastiCacheReplicationGroup.RedisEndpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-ElastiCacheEndpoint'
+
+  ElastiCachePort:
+    Description: ElastiCache Port
+    Value: !GetAtt ElastiCacheReplicationGroup.RedisEndpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-ElastiCachePort'
+
+  ElastiCacheConnectionString:
+    Description: ElastiCache Connection String (redis://endpoint:port)
+    Value: !Sub 'redis://${ElastiCacheReplicationGroup.RedisEndpoint.Address}:${ElastiCacheReplicationGroup.RedisEndpoint.Port}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ElastiCacheConnectionString'

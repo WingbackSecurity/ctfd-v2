@@ -80,3 +80,10 @@ node_modules/
 
 # Flask Profiler files
 flask_profiler.sql
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+.terraform/

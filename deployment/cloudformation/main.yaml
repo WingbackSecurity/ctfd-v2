@@ -1,0 +1,453 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Main CloudFormation Stack for CTFd Deployment - Orchestrates all nested stacks'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  RDSAllowedIP:
+    Type: String
+    Description: Your IP address in CIDR format (e.g., 24.23.219.102/32)
+  
+  CTFDImage:
+    Type: String
+    Default: 127214172072.dkr.ecr.us-east-1.amazonaws.com/ctfd:latest
+    Description: Docker image for CTFd from ECR
+  
+  ECSClusterName:
+    Type: String
+    Default: ctfd-ecs
+    Description: Name of the ECS cluster
+  
+  # ElastiCache Configuration
+  EnableElastiCache:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable ElastiCache Redis
+  
+  ElastiCacheClusterInstances:
+    Type: Number
+    Default: 1
+    Description: Number of instances in ElastiCache cluster
+  
+  ElastiCacheClusterInstanceType:
+    Type: String
+    Default: cache.t2.micro
+    Description: Instance type for ElastiCache cluster
+  
+  ElastiCacheClusterPort:
+    Type: Number
+    Default: 6379
+    Description: Port for ElastiCache cluster
+  
+  ElastiCacheEncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: Encryption key ARN for ElastiCache
+  
+  # RDS Configuration
+  DBServerless:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Use serverless RDS
+  
+  DBServerlessMinCapacity:
+    Type: String
+    Default: '0.5'
+    Description: Minimum ACU for serverless RDS
+  
+  DBServerlessMaxCapacity:
+    Type: String
+    Default: '2'
+    Description: Maximum ACU for serverless RDS
+  
+  DBClusterInstanceType:
+    Type: String
+    Default: db.r5.large
+    Description: Instance type (if not serverless)
+  
+  DBEngine:
+    Type: String
+    Default: aurora-mysql
+    Description: Database engine
+  
+  DBEngineVersion:
+    Type: String
+    Default: 8.0.mysql_aurora.3.08.2
+    Description: Database engine version
+  
+  DBPort:
+    Type: Number
+    Default: 3306
+    Description: Database port
+  
+  DBUser:
+    Type: String
+    Default: ctfd
+    Description: Database username
+  
+  DBName:
+    Type: String
+    Default: ctfd
+    Description: Database name
+  
+  DBDeletionProtection:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable deletion protection
+  
+  DBSkipFinalSnapshot:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Skip final snapshot
+  
+  RDSEncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: Encryption key ARN for RDS
+  
+  CharacterSet:
+    Type: String
+    Default: utf8mb4
+    Description: Database character set
+  
+  Collation:
+    Type: String
+    Default: utf8mb4_bin
+    Description: Database collation
+  
+  # ECS Configuration
+  FrontendDesiredCount:
+    Type: Number
+    Default: 1
+    Description: Desired number of task instances
+  
+  FrontendMinimumHealthyPercent:
+    Type: Number
+    Default: 100
+    Description: Minimum healthy percent
+  
+  FrontendMaximumPercent:
+    Type: Number
+    Default: 200
+    Description: Maximum percent
+  
+  FrontendMinimumCount:
+    Type: Number
+    Default: 1
+    Description: Minimum task count for auto-scaling
+  
+  FrontendMaximumCount:
+    Type: Number
+    Default: 4
+    Description: Maximum task count for auto-scaling
+  
+  # S3 Configuration
+  ForceDestroyChallengeBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Force destroy challenge bucket
+  
+  S3EncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: Encryption key ARN for S3
+  
+  # CDN Configuration
+  CreateCDN:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Create CloudFront CDN
+  
+  CTFDomain:
+    Type: String
+    Default: ''
+    Description: Custom domain for CTFd
+  
+  CTFDomainZoneId:
+    Type: String
+    Default: ''
+    Description: Route53 Hosted Zone ID
+  
+  HTTPSCertificateARN:
+    Type: String
+    Default: ''
+    Description: ACM Certificate ARN for HTTPS
+  
+  ForceDestroyLogBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Force destroy CloudFront log bucket
+
+Resources:
+  # Generate CTFd Secret Key
+  CTFDSecretKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AppName}-ctfd-secret-key'
+      Description: Secret key for CTFd
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: 'secret_key'
+        PasswordLength: 24
+        IncludeSpace: false
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-ctfd-secret-key'
+        - Key: Environment
+          Value: production
+
+  # VPC Stack
+  VPCStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/vpc.yaml
+      Parameters:
+        AppName: !Ref AppName
+        VPCCIDR: 10.0.0.0/16
+      TimeoutInMinutes: 15
+
+  # RDS Stack
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/rds.yaml
+      Parameters:
+        AppName: !Ref AppName
+        VPCId: !GetAtt VPCStack.Outputs.VPCId
+        PrivateSubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
+        VPCCIDR: !GetAtt VPCStack.Outputs.VPCCIDR
+        DBEngine: !Ref DBEngine
+        DBEngineVersion: !Ref DBEngineVersion
+        DBPort: !Ref DBPort
+        DBUser: !Ref DBUser
+        DBName: !Ref DBName
+        DBServerless: !Ref DBServerless
+        DBServerlessMinCapacity: !Ref DBServerlessMinCapacity
+        DBServerlessMaxCapacity: !Ref DBServerlessMaxCapacity
+        DBClusterInstanceType: !Ref DBClusterInstanceType
+        DBDeletionProtection: !Ref DBDeletionProtection
+        DBSkipFinalSnapshot: !Ref DBSkipFinalSnapshot
+        RDSEncryptionKeyARN: !Ref RDSEncryptionKeyARN
+        CharacterSet: !Ref CharacterSet
+        Collation: !Ref Collation
+        PubliclyAccessible: 'true'
+      TimeoutInMinutes: 30
+
+  # RDS Security Group Rule - Allow access from your IP
+  RDSAllowMyIP:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: RDSStack
+    Properties:
+      GroupId: !GetAtt RDSStack.Outputs.RDSSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref DBPort
+      ToPort: !Ref DBPort
+      CidrIp: !Ref RDSAllowedIP
+      Description: Allow RDS access from my IP
+
+  # RDS Username Secret
+  RDSUsernameSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AppName}-rds-username'
+      Description: RDS username
+      SecretString: !Ref DBUser
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-rds-username'
+        - Key: Environment
+          Value: production
+
+  # RDS Password Secret (reference the one created by RDS stack)
+  RDSPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    DependsOn: RDSStack
+    Properties:
+      Name: !Sub '${AppName}-rds-password'
+      Description: RDS password
+      SecretString: !Sub '{{resolve:secretsmanager:${RDSStack.Outputs.DBPasswordSecretARN}:SecretString:password}}'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-rds-password'
+        - Key: Environment
+          Value: production
+
+  # Database URL Secret
+  DatabaseURLSecret:
+    Type: AWS::SecretsManager::Secret
+    DependsOn: RDSStack
+    Properties:
+      Name: !Sub '${AppName}-database-url'
+      Description: Database connection URL
+      SecretString: !Sub 
+        - 'mysql+pymysql://${DBUser}:{{resolve:secretsmanager:${PasswordSecret}:SecretString:password}}@${Endpoint}:${Port}/${DBName}'
+        - DBUser: !Ref DBUser
+          PasswordSecret: !GetAtt RDSStack.Outputs.DBPasswordSecretARN
+          Endpoint: !GetAtt RDSStack.Outputs.RDSEndpoint
+          Port: !Ref DBPort
+          DBName: !Ref DBName
+      Tags:
+        - Key: Name
+          Value: database_url
+        - Key: Environment
+          Value: production
+
+  # S3 Stack
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/s3.yaml
+      Parameters:
+        AppName: !Ref AppName
+        ForceDestroyChallengeBucket: !Ref ForceDestroyChallengeBucket
+        S3EncryptionKeyARN: !Ref S3EncryptionKeyARN
+      TimeoutInMinutes: 5
+
+  # ElastiCache Stack (conditional)
+  ElastiCacheStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: EnableElastiCacheCondition
+    DependsOn: VPCStack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/elasticache.yaml
+      Parameters:
+        AppName: !Ref AppName
+        VPCId: !GetAtt VPCStack.Outputs.VPCId
+        PrivateSubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
+        VPCCIDR: !GetAtt VPCStack.Outputs.VPCCIDR
+        ElastiCacheClusterInstances: !Ref ElastiCacheClusterInstances
+        ElastiCacheClusterInstanceType: !Ref ElastiCacheClusterInstanceType
+        ElastiCacheClusterPort: !Ref ElastiCacheClusterPort
+        ElastiCacheEncryptionKeyARN: !Ref ElastiCacheEncryptionKeyARN
+      TimeoutInMinutes: 20
+
+  # Redis URL Secret (conditional)
+  RedisURLSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: EnableElastiCacheCondition
+    DependsOn: ElastiCacheStack
+    Properties:
+      Name: !Sub '${AppName}-redis-url'
+      Description: Redis connection URL
+      SecretString: !GetAtt ElastiCacheStack.Outputs.ElastiCacheConnectionString
+      Tags:
+        - Key: Name
+          Value: redis_url
+        - Key: Environment
+          Value: production
+
+  # ECS Stack
+  ECSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - RDSStack
+      - S3Stack
+      - DatabaseURLSecret
+      - CTFDSecretKey
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/ecs.yaml
+      Parameters:
+        AppName: !Ref AppName
+        ECSClusterName: !Ref ECSClusterName
+        VPCId: !GetAtt VPCStack.Outputs.VPCId
+        PrivateSubnetIds: !GetAtt VPCStack.Outputs.PrivateSubnetIds
+        PublicSubnetIds: !GetAtt VPCStack.Outputs.PublicSubnetIds
+        VPCCIDR: !GetAtt VPCStack.Outputs.VPCCIDR
+        CTFDImage: !Ref CTFDImage
+        DatabaseURLSecretARN: !Ref DatabaseURLSecret
+        CTFDSecretKeySecretARN: !Ref CTFDSecretKey
+        RedisURLSecretARN: !If
+          - EnableElastiCacheCondition
+          - !Ref RedisURLSecret
+          - ''
+        ChallengeBucket: !GetAtt S3Stack.Outputs.ChallengeBucketId
+        ChallengeBucketARN: !GetAtt S3Stack.Outputs.ChallengeBucketARN
+        FrontendDesiredCount: !Ref FrontendDesiredCount
+        FrontendMinimumHealthyPercent: !Ref FrontendMinimumHealthyPercent
+        FrontendMaximumPercent: !Ref FrontendMaximumPercent
+        FrontendMinimumCount: !Ref FrontendMinimumCount
+        FrontendMaximumCount: !Ref FrontendMaximumCount
+      TimeoutInMinutes: 30
+
+  # CDN Stack (conditional)
+  CDNStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateCDNCondition
+    DependsOn: ECSStack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/ctfd-cf-templates-127214172072/cdn.yaml
+      Parameters:
+        AppName: !Ref AppName
+        OriginDomainName: !GetAtt ECSStack.Outputs.LoadBalancerDNS
+        CTFDomain: !Ref CTFDomain
+        CTFDomainZoneId: !Ref CTFDomainZoneId
+        HTTPSCertificateARN: !Ref HTTPSCertificateARN
+        ForceDestroyLogBucket: !Ref ForceDestroyLogBucket
+      TimeoutInMinutes: 20
+
+Conditions:
+  EnableElastiCacheCondition: !Equals [!Ref EnableElastiCache, 'true']
+  CreateCDNCondition: !Equals [!Ref CreateCDN, 'true']
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name for the Load Balancer
+    Value: !GetAtt ECSStack.Outputs.LoadBalancerDNS
+
+  LoadBalancerPort:
+    Description: Port that CTFd is reachable on
+    Value: 80
+
+  VPCId:
+    Description: VPC ID
+    Value: !GetAtt VPCStack.Outputs.VPCId
+
+  ChallengeBucketId:
+    Description: Challenge bucket name
+    Value: !GetAtt S3Stack.Outputs.ChallengeBucketId
+
+  RDSEndpoint:
+    Description: RDS cluster endpoint address
+    Value: !GetAtt RDSStack.Outputs.RDSEndpoint
+
+  RDSPort:
+    Description: RDS cluster port
+    Value: !GetAtt RDSStack.Outputs.RDSPort
+
+  RDSDatabaseName:
+    Description: RDS database name
+    Value: !GetAtt RDSStack.Outputs.DBName
+
+  RDSSecurityGroupId:
+    Description: RDS security group ID
+    Value: !GetAtt RDSStack.Outputs.RDSSecurityGroupId
+
+  RDSUsernameSecretName:
+    Description: Name of Secrets Manager secret containing RDS username
+    Value: !Ref RDSUsernameSecret
+
+  RDSPasswordSecretName:
+    Description: Name of Secrets Manager secret containing RDS password
+    Value: !Ref RDSPasswordSecret
+
+  ElastiCacheEndpoint:
+    Condition: EnableElastiCacheCondition
+    Description: ElastiCache endpoint (if enabled)
+    Value: !GetAtt ElastiCacheStack.Outputs.ElastiCacheConnectionString
+
+  CloudFrontDomainName:
+    Condition: CreateCDNCondition
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CDNStack.Outputs.CloudFrontDomainName

@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFront CDN for CTFd (Optional)'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  OriginDomainName:
+    Type: String
+    Description: Origin domain name (ALB DNS name)
+  
+  CTFDomain:
+    Type: String
+    Default: ''
+    Description: Custom domain for CTFd (optional)
+  
+  CTFDomainZoneId:
+    Type: String
+    Default: ''
+    Description: Route53 Hosted Zone ID for custom domain (optional)
+  
+  HTTPSCertificateARN:
+    Type: String
+    Default: ''
+    Description: ACM Certificate ARN for HTTPS (optional)
+  
+  ForceDestroyLogBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Force destroy CloudFront log bucket
+
+Resources:
+  # S3 Bucket for CloudFront Logs
+  CloudFrontLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: !If
+      - ForceDestroy
+      - Delete
+      - Retain
+    Properties:
+      BucketName: !Sub '${AppName}-cloudfront-logs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cloudfront-logs'
+
+  # CloudFront Origin Access Control (replaces OAI)
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AppName}-oac'
+        OriginAccessControlOriginType: loadbalancer
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases: !If
+          - HasCustomDomain
+          - - !Ref CTFDomain
+          - !Ref AWS::NoValue
+        Origins:
+          - Id: !Ref AppName
+            DomainName: !Ref OriginDomainName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginSslProtocols:
+                - TLSv1.2
+        Enabled: true
+        Comment: !Sub 'CloudFront distribution for ${AppName}'
+        DefaultRootObject: /
+        PriceClass: PriceClass_All
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        ViewerProtocolPolicy: redirect-to-https
+        DefaultCacheBehavior:
+          TargetOriginId: !Ref AppName
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: true
+            Cookies:
+              Forward: all
+            Headers:
+              - '*'
+          Compress: true
+          MinTTL: 0
+          DefaultTTL: 15
+          MaxTTL: 86400
+        CacheBehaviors:
+          - PathPattern: themes/*
+            TargetOriginId: !Ref AppName
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+            Compress: true
+            MinTTL: 0
+            DefaultTTL: 15
+            MaxTTL: 86400
+          - PathPattern: files/*
+            TargetOriginId: !Ref AppName
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            ForwardedValues:
+              QueryString: true
+              Cookies:
+                Forward: none
+            Compress: true
+            MinTTL: 0
+            DefaultTTL: 15
+            MaxTTL: 86400
+        Logging:
+          Bucket: !GetAtt CloudFrontLogBucket.DomainName
+          Prefix: access-logs/
+          IncludeCookies: false
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref HTTPSCertificateARN
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cdn'
+
+  # Route53 Record (if custom domain provided)
+  Route53Record:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref CTFDomainZoneId
+      Name: !Ref CTFDomain
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront hosted zone ID
+
+Conditions:
+  HasCustomDomain: !And
+    - !Not [!Equals [!Ref CTFDomain, '']]
+    - !Not [!Equals [!Ref CTFDomainZoneId, '']]
+    - !Not [!Equals [!Ref HTTPSCertificateARN, '']]
+  ForceDestroy: !Equals [!Ref ForceDestroyLogBucket, 'true']
+
+Outputs:
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'
+
+  CloudFrontDomainName:
+    Description: CloudFront Distribution Domain Name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomainName'

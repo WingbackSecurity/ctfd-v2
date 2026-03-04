@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 Bucket for CTFd Challenge Files'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  ForceDestroyChallengeBucket:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Force destroy bucket on stack deletion
+  
+  S3EncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: KMS key ARN for S3 encryption (empty for default)
+
+Resources:
+  ChallengeBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      # BucketName omitted - CloudFormation will auto-generate a unique name
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption: !If
+        - HasEncryptionKey
+        - ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: aws:kms
+                KMSMasterKeyID: !Ref S3EncryptionKeyARN
+              BucketKeyEnabled: true
+        - ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-challenges'
+
+  ChallengeBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ChallengeBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowECSListBucket
+            Effect: Allow
+            Principal:
+              Service:
+                - ecs.amazonaws.com
+                - s3.amazonaws.com
+                - ec2.amazonaws.com
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt ChallengeBucket.Arn
+          - Sid: AllowECSPutGetDeleteObject
+            Effect: Allow
+            Principal:
+              Service:
+                - ecs.amazonaws.com
+                - s3.amazonaws.com
+                - ec2.amazonaws.com
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:DeleteObject
+            Resource: !Sub '${ChallengeBucket.Arn}/*'
+
+Conditions:
+  ForceDestroy: !Equals [!Ref ForceDestroyChallengeBucket, 'true']
+  HasEncryptionKey: !Not [!Equals [!Ref S3EncryptionKeyARN, '']]
+
+Outputs:
+  ChallengeBucketId:
+    Description: Challenge Bucket Name
+    Value: !Ref ChallengeBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-ChallengeBucketId'
+
+  ChallengeBucketARN:
+    Description: Challenge Bucket ARN
+    Value: !GetAtt ChallengeBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ChallengeBucketARN'

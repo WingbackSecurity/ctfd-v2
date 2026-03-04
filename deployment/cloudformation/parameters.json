@@ -1,0 +1,142 @@
+[
+  {
+    "ParameterKey": "AppName",
+    "ParameterValue": "ctfd-v2"
+  },
+  {
+    "ParameterKey": "RDSAllowedIP",
+    "ParameterValue": "24.23.219.102/32"
+  },
+  {
+    "ParameterKey": "CTFDImage",
+    "ParameterValue": "127214172072.dkr.ecr.us-east-1.amazonaws.com/ctfd:latest"
+  },
+  {
+    "ParameterKey": "ECSClusterName",
+    "ParameterValue": "ctfd-ecs"
+  },
+  {
+    "ParameterKey": "EnableElastiCache",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "ElastiCacheClusterInstances",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ElastiCacheClusterInstanceType",
+    "ParameterValue": "cache.t2.micro"
+  },
+  {
+    "ParameterKey": "ElastiCacheClusterPort",
+    "ParameterValue": "6379"
+  },
+  {
+    "ParameterKey": "ElastiCacheEncryptionKeyARN",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "DBServerless",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "DBServerlessMinCapacity",
+    "ParameterValue": "0.5"
+  },
+  {
+    "ParameterKey": "DBServerlessMaxCapacity",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "DBClusterInstanceType",
+    "ParameterValue": "db.r5.large"
+  },
+  {
+    "ParameterKey": "DBEngine",
+    "ParameterValue": "aurora-mysql"
+  },
+  {
+    "ParameterKey": "DBEngineVersion",
+    "ParameterValue": "8.0.mysql_aurora.3.08.2"
+  },
+  {
+    "ParameterKey": "DBPort",
+    "ParameterValue": "3306"
+  },
+  {
+    "ParameterKey": "DBUser",
+    "ParameterValue": "ctfd"
+  },
+  {
+    "ParameterKey": "DBName",
+    "ParameterValue": "ctfd"
+  },
+  {
+    "ParameterKey": "DBDeletionProtection",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "DBSkipFinalSnapshot",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "RDSEncryptionKeyARN",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "CharacterSet",
+    "ParameterValue": "utf8mb4"
+  },
+  {
+    "ParameterKey": "Collation",
+    "ParameterValue": "utf8mb4_bin"
+  },
+  {
+    "ParameterKey": "FrontendDesiredCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "FrontendMinimumHealthyPercent",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "FrontendMaximumPercent",
+    "ParameterValue": "200"
+  },
+  {
+    "ParameterKey": "FrontendMinimumCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "FrontendMaximumCount",
+    "ParameterValue": "4"
+  },
+  {
+    "ParameterKey": "ForceDestroyChallengeBucket",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "S3EncryptionKeyARN",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "CreateCDN",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "CTFDomain",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "CTFDomainZoneId",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "HTTPSCertificateARN",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "ForceDestroyLogBucket",
+    "ParameterValue": "false"
+  }
+]

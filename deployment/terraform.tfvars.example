@@ -1,0 +1,37 @@
+# Copy this file to terraform.tfvars and fill in your values
+
+# Your IP address in CIDR format (required)
+# Get your IP: curl https://checkip.amazonaws.com
+rds_allowed_ip = "24.23.219.102/32"
+
+# App name
+app_name = "ctfd-v2"
+
+# AWS Configuration
+aws_region  = "us-east-1"
+aws_profile = "ctfd"
+
+# ECR Image (default is already set, override if needed)
+# ctfd_image = "127214172072.dkr.ecr.us-east-1.amazonaws.com/ctfd:latest"
+
+# ElastiCache - Enable before training sessions
+enable_elasticache = false
+elasticache_cluster_instances = 1
+elasticache_cluster_instance_type = "cache.t2.micro"
+
+# RDS Configuration - Optimized for cost
+db_serverless = true
+db_serverless_min_capacity = 0.5
+db_serverless_max_capacity = 2
+
+# ECS Configuration - Optimized for cost
+ecs_cluster_name = "ctfd-ecs"
+frontend_desired_count = 1
+frontend_minimum_count = 1
+frontend_maximum_count = 4
+
+# Security
+db_deletion_protection = false  # Set to true after migration
+
+# CDN (optional)
+create_cdn = false

@@ -1,0 +1,31 @@
+{% extends "challenge.html" %}
+
+{% block description %}
+    <style>
+      .challenge-desc > ul {
+          padding-left: 10px;
+      }
+
+      .ctfd-multiple-choice-item span {
+          padding-left: 5px;
+      }
+    </style>
+
+    {{ challenge.html }}
+{% endblock %}
+
+{% block input %}
+    <input id="challenge-id" class="challenge-id" type="hidden" value="{{ challenge.id }}">
+{% endblock %}
+
+{% block submit %}
+    <button 
+        id="challenge-submit" 
+        style="height: 3rem !important;" 
+        class="challenge-submit btn btn-outline-secondary w-100 h-100" 
+        type="submit"
+        @click.debounce.500ms="submitChallenge()"
+    >
+        Submit
+    </button>
+{% endblock %}

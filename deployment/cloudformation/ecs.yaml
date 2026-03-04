@@ -1,0 +1,460 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Cluster, Service, ALB, and Auto-scaling for CTFd'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  ECSClusterName:
+    Type: String
+    Default: ctfd-ecs
+    Description: Name of the ECS cluster
+  
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: List of private subnet IDs
+  
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: List of public subnet IDs
+  
+  VPCCIDR:
+    Type: String
+    Description: VPC CIDR Block
+  
+  CTFDImage:
+    Type: String
+    Default: 127214172072.dkr.ecr.us-east-1.amazonaws.com/ctfd:latest
+    Description: Docker image for CTFd
+  
+  DatabaseURLSecretARN:
+    Type: String
+    Description: ARN of Secrets Manager secret containing DATABASE_URL
+  
+  CTFDSecretKeySecretARN:
+    Type: String
+    Description: ARN of Secrets Manager secret containing SECRET_KEY
+  
+  RedisURLSecretARN:
+    Type: String
+    Default: ''
+    Description: ARN of Secrets Manager secret containing REDIS_URL (optional)
+  
+  ChallengeBucket:
+    Type: String
+    Description: S3 bucket name for challenges
+  
+  ChallengeBucketARN:
+    Type: String
+    Description: S3 bucket ARN for challenges
+  
+  FrontendDesiredCount:
+    Type: Number
+    Default: 1
+    Description: Desired number of task instances
+  
+  FrontendMinimumHealthyPercent:
+    Type: Number
+    Default: 100
+    Description: Minimum healthy percent for deployment
+  
+  FrontendMaximumPercent:
+    Type: Number
+    Default: 200
+    Description: Maximum percent for deployment
+  
+  FrontendMinimumCount:
+    Type: Number
+    Default: 1
+    Description: Minimum number of tasks for auto-scaling
+  
+  FrontendMaximumCount:
+    Type: Number
+    Default: 4
+    Description: Maximum number of tasks for auto-scaling
+
+Resources:
+  # CloudWatch Log Group
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref AppName
+      RetentionInDays: 7
+      Tags:
+        - Key: Environment
+          Value: production
+        - Key: Application
+          Value: !Ref AppName
+
+  # Using existing ECS Cluster: ctfd-ecs
+  # No cluster creation needed - referencing by name
+
+  # Security Group for ALB
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AppName}-alb-sg'
+      GroupDescription: Allow HTTP inbound traffic
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from Internet
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIpv6: ::/0
+          Description: HTTP from Internet (IPv6)
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: allow_http
+
+  # Security Group for ECS Service
+  ECSServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${AppName}-ecs-service-sg'
+      GroupDescription: Allow inbound traffic from ALB to ECS Service
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: HTTP from ALB
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: alb_to_ecs_service
+
+  # IAM Role for ECS Task Execution
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AppName}-ecs-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: GetSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - secretsmanager:GetSecretValue
+                Resource: !If
+                  - HasRedis
+                  - - !Ref DatabaseURLSecretARN
+                    - !Ref CTFDSecretKeySecretARN
+                    - !Ref RedisURLSecretARN
+                  - - !Ref DatabaseURLSecretARN
+                    - !Ref CTFDSecretKeySecretARN
+
+  # IAM Role for ECS Task
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AppName}-ecs-task-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3FullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Ref ChallengeBucketARN
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub '${ChallengeBucketARN}/*'
+
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Ref AppName
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      RuntimePlatform:
+        OperatingSystemFamily: LINUX
+        CpuArchitecture: ARM64
+      ContainerDefinitions:
+        - Name: !Ref AppName
+          Image: !Ref CTFDImage
+          Essential: true
+          Memory: 1024
+          Cpu: 512
+          PortMappings:
+            - ContainerPort: 8000
+              HostPort: 8000
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref AppName
+          Secrets: !If
+            - HasRedis
+            - - Name: DATABASE_URL
+                ValueFrom: !Ref DatabaseURLSecretARN
+              - Name: SECRET_KEY
+                ValueFrom: !Ref CTFDSecretKeySecretARN
+              - Name: REDIS_URL
+                ValueFrom: !Ref RedisURLSecretARN
+            - - Name: DATABASE_URL
+                ValueFrom: !Ref DatabaseURLSecretARN
+              - Name: SECRET_KEY
+                ValueFrom: !Ref CTFDSecretKeySecretARN
+          Environment:
+            - Name: WORKERS
+              Value: '3'
+            - Name: REVERSE_PROXY
+              Value: 'true'
+            - Name: UPLOAD_PROVIDER
+              Value: s3
+            - Name: AWS_S3_BUCKET
+              Value: !Ref ChallengeBucket
+            - Name: ACCESS_LOG
+              Value: '-'
+            - Name: ERROR_LOG
+              Value: '-'
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${AppName}-alb'
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Environment
+          Value: production
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${AppName}-tg'
+      Port: 8000
+      Protocol: HTTP
+      VpcId: !Ref VPCId
+      TargetType: ip
+      HealthCheckPath: /healthcheck
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-tg'
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ECS Service
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ALBListener
+      - ECSTaskExecutionRole
+    Properties:
+      ServiceName: !Ref AppName
+      Cluster: !Ref ECSClusterName
+      TaskDefinition: !Ref ECSTaskDefinition
+      LaunchType: FARGATE
+      DesiredCount: !Ref FrontendDesiredCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: !Ref FrontendMinimumHealthyPercent
+        MaximumPercent: !Ref FrontendMaximumPercent
+      LoadBalancers:
+        - ContainerName: !Ref AppName
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref ECSServiceSecurityGroup
+          Subnets: !Ref PrivateSubnetIds
+
+  # Auto-scaling Target
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: ECSService
+    Properties:
+      MaxCapacity: !Ref FrontendMaximumCount
+      MinCapacity: !Ref FrontendMinimumCount
+      ResourceId: !Sub 'service/${ECSClusterName}/${ECSService.Name}'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  # CloudWatch Alarm for High CPU
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-cpu-high'
+      AlarmDescription: Scale up when CPU utilization is high
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cpu-high-alarm'
+
+  # CloudWatch Alarm for High Request Count
+  RequestCountHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-request-count-high'
+      AlarmDescription: Scale up when request count is high
+      MetricName: RequestCountPerTarget
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+      Dimensions:
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+        - Name: LoadBalancer
+          Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-request-count-high-alarm'
+
+  # CloudWatch Alarm for Low CPU
+  CPULowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AppName}-cpu-low'
+      AlarmDescription: Scale down when CPU utilization is low
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 30
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt ECSService.Name
+        - Name: ClusterName
+          Value: !Ref ECSClusterName
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-cpu-low-alarm'
+
+  # Auto-scaling Policy: Scale Up
+  ScaleUpPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: AutoScalingTarget
+    Properties:
+      PolicyName: !Sub '${AppName}-scale-up'
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+
+  # Auto-scaling Policy: Scale Down
+  ScaleDownPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: AutoScalingTarget
+    Properties:
+      PolicyName: !Sub '${AppName}-scale-down'
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 300
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+Conditions:
+  HasRedis: !Not [!Equals [!Ref RedisURLSecretARN, '']]
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name for the Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerDNS'
+
+  ECSClusterId:
+    Description: ECS Cluster Name (existing cluster)
+    Value: !Ref ECSClusterName
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSClusterId'

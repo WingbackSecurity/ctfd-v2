@@ -1,0 +1,250 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'RDS Aurora MySQL Serverless v2 Cluster for CTFd'
+
+Parameters:
+  AppName:
+    Type: String
+    Default: ctfd-v2
+    Description: Name of the application
+  
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID
+  
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: List of private subnet IDs
+  
+  VPCCIDR:
+    Type: String
+    Description: VPC CIDR Block
+  
+  DBEngine:
+    Type: String
+    Default: aurora-mysql
+    Description: Database engine
+  
+  DBEngineVersion:
+    Type: String
+    Default: 8.0.mysql_aurora.3.08.2
+    Description: Database engine version
+  
+  DBPort:
+    Type: Number
+    Default: 3306
+    Description: Database port
+  
+  DBUser:
+    Type: String
+    Default: ctfd
+    Description: Database master username
+  
+  DBName:
+    Type: String
+    Default: ctfd
+    Description: Database name
+  
+  DBServerless:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Use serverless v2 scaling (ignored, always serverless)
+  
+  DBServerlessMinCapacity:
+    Type: String
+    Default: '0.5'
+    Description: Minimum ACU for serverless
+  
+  DBServerlessMaxCapacity:
+    Type: String
+    Default: '2'
+    Description: Maximum ACU for serverless
+  
+  DBClusterInstanceType:
+    Type: String
+    Default: db.r5.large
+    Description: Instance type (ignored, using serverless)
+  
+  DBDeletionProtection:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable deletion protection
+  
+  DBSkipFinalSnapshot:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Skip final snapshot on deletion
+  
+  RDSEncryptionKeyARN:
+    Type: String
+    Default: ''
+    Description: KMS key ARN for encryption (empty for default)
+  
+  CharacterSet:
+    Type: String
+    Default: utf8mb4
+    Description: Database character set
+  
+  Collation:
+    Type: String
+    Default: utf8mb4_bin
+    Description: Database collation
+  
+  PubliclyAccessible:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Make RDS publicly accessible
+
+Conditions:
+  IsDeletionProtected: !Equals [!Ref DBDeletionProtection, 'true']
+  IsPublic: !Equals [!Ref PubliclyAccessible, 'true']
+
+Resources:
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${AppName} RDS subnet group'
+      SubnetIds: !Ref PrivateSubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-db-subnet'
+
+  # RDS Security Group
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS security group
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref DBPort
+          ToPort: !Ref DBPort
+          CidrIp: !Ref VPCCIDR
+          Description: Allow database access from VPC
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 1024
+          ToPort: 65535
+          CidrIp: !Ref VPCCIDR
+          Description: Allow outbound traffic
+      Tags:
+        - Key: Name
+          Value: rds-security-group
+
+  # DB Cluster Parameter Group
+  DBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub '${AppName} DB cluster parameter group'
+      Family: aurora-mysql8.0
+      Parameters:
+        character_set_client: !Ref CharacterSet
+        character_set_connection: !Ref CharacterSet
+        character_set_database: !Ref CharacterSet
+        character_set_results: !Ref CharacterSet
+        character_set_server: !Ref CharacterSet
+        collation_connection: !Ref Collation
+        collation_server: !Ref Collation
+
+  # Generate random password
+  DBPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: RDS password for CTFd
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-rds-password-temp'
+
+  # RDS Cluster - Aurora Serverless v2
+  RDSCluster:
+    Type: AWS::RDS::DBCluster
+    DependsOn:
+      - DBSubnetGroup
+      - DBClusterParameterGroup
+      - RDSSecurityGroup
+      - DBPassword
+    Properties:
+      DatabaseName: !Ref DBName
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DBPassword}:SecretString:password}}'
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      VpcSecurityGroupIds:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: !Ref DBEngine
+      EngineMode: provisioned
+      EngineVersion: !Ref DBEngineVersion
+      BackupRetentionPeriod: 2
+      StorageEncrypted: true
+      DeletionProtection: !If [IsDeletionProtected, true, false]
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref DBServerlessMinCapacity
+        MaxCapacity: !Ref DBServerlessMaxCapacity
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-db-cluster'
+
+  # RDS Cluster Instance - Serverless
+  RDSClusterInstance:
+    Type: AWS::RDS::DBInstance
+    DependsOn: RDSCluster
+    Properties:
+      DBClusterIdentifier: !Ref RDSCluster
+      Engine: !Ref DBEngine
+      DBInstanceClass: db.serverless
+      PubliclyAccessible: !If [IsPublic, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub '${AppName}-db-instance'
+
+Outputs:
+  RDSClusterId:
+    Description: RDS Cluster Identifier
+    Value: !Ref RDSCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSClusterId'
+
+  RDSEndpoint:
+    Description: RDS Cluster Endpoint
+    Value: !GetAtt RDSCluster.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSEndpoint'
+
+  RDSPort:
+    Description: RDS Port
+    Value: !Ref DBPort
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSPort'
+
+  RDSSecurityGroupId:
+    Description: RDS Security Group ID
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-RDSSecurityGroupId'
+
+  DBName:
+    Description: Database Name
+    Value: !Ref DBName
+    Export:
+      Name: !Sub '${AWS::StackName}-DBName'
+
+  DBUser:
+    Description: Database Username
+    Value: !Ref DBUser
+    Export:
+      Name: !Sub '${AWS::StackName}-DBUser'
+
+  DBPasswordSecretARN:
+    Description: Secret ARN for DB Password
+    Value: !Ref DBPassword
+    Export:
+      Name: !Sub '${AWS::StackName}-DBPasswordSecretARN'
