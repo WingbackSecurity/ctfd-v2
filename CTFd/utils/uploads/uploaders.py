@@ -2,6 +2,7 @@ import datetime
 import os
 import posixpath
 import string
+import threading
 import time
 from pathlib import Path, PurePath
 from shutil import copyfileobj, rmtree
@@ -10,8 +11,9 @@ from urllib.parse import urlparse
 import boto3
 from botocore.client import Config
 from flask import current_app, redirect, send_file
-from freezegun import freeze_time
 from werkzeug.utils import safe_join, secure_filename
+
+_presign_lock = threading.Lock()
 
 from CTFd.utils import get_app_config
 from CTFd.utils.encoding import hexencode
@@ -189,19 +191,33 @@ class S3Uploader(BaseUploader):
             filename = self.s3_prefix + filename
         key = filename
         filename = filename.split("/").pop()
-        with freeze_time(datetime.datetime.utcfromtimestamp(truncated_timestamp)):
-            url = self.s3.generate_presigned_url(
-                "get_object",
-                Params={
-                    "Bucket": self.bucket,
-                    "Key": key,
-                    "ResponseContentDisposition": "attachment; filename={}".format(
-                        filename
-                    ),
-                    "ResponseCacheControl": "max-age=3600",
-                },
-                ExpiresIn=3600,
-            )
+        # Generate a presigned URL with a fixed signing time for cache-friendly URLs.
+        # We patch datetime briefly under a lock to avoid the gevent crash that
+        # freezegun causes (IndexError in _tz_offset under concurrent greenlets).
+        fixed_time = datetime.datetime.utcfromtimestamp(truncated_timestamp)
+        orig_now = datetime.datetime.now
+        orig_utcnow = datetime.datetime.utcnow
+        with _presign_lock:
+            try:
+                datetime.datetime.now = staticmethod(
+                    lambda tz=None: fixed_time if tz is None else fixed_time.replace(tzinfo=tz)
+                )
+                datetime.datetime.utcnow = staticmethod(lambda: fixed_time)
+                url = self.s3.generate_presigned_url(
+                    "get_object",
+                    Params={
+                        "Bucket": self.bucket,
+                        "Key": key,
+                        "ResponseContentDisposition": "attachment; filename={}".format(
+                            filename
+                        ),
+                        "ResponseCacheControl": "max-age=3600",
+                    },
+                    ExpiresIn=3600,
+                )
+            finally:
+                datetime.datetime.now = orig_now
+                datetime.datetime.utcnow = orig_utcnow
 
         custom_domain = get_app_config("AWS_S3_CUSTOM_DOMAIN")
         if custom_domain:
