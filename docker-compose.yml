@@ -13,6 +13,11 @@ services:
       - ACCESS_LOG=-
       - ERROR_LOG=-
       - REVERSE_PROXY=true
+      # discord_webhook plugin (CTFd/plugins/discord_webhook): announces challenge solves.
+      # Uncomment and set the webhook URL to activate; while unset the plugin loads but stays inactive.
+      # - DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/XXXXXXXX/YYYYYYYY
+      # - DISCORD_WEBHOOK_LIMIT=3   # announce only the first N solves per challenge (0 = every solve)
+      # - DISCORD_WEBHOOK_MESSAGE=Congratulations to team {team} for the {fsolves} solve on challenge {challenge}!
     volumes:
       - .data/CTFd/logs:/var/log/CTFd
       - .data/CTFd/uploads:/var/uploads
