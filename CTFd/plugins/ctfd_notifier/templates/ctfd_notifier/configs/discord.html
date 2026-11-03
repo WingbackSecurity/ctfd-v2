@@ -1,0 +1,75 @@
+<form method="POST" autocomplete="off" class="w-100">
+	<div class="form-group">
+		<label>Discord notifications</label>
+		<select class="form-control custom-select" name="discord_notifier">
+			<option value="true" {% if config.get("discord_notifier") == "true" %}selected{% endif %}>Enabled</option>
+			<option value="false" {% if config.get("discord_notifier") != "true" %}selected{% endif %}>Disabled</option>
+		</select>
+	</div>
+
+	<div class="form-group">
+		<label>Discord webhook URL</label>
+		<input type="password" class="form-control" id="discord-webhook-url" name="discord_webhook_url"
+			autocomplete="new-password" placeholder="https://discord.com/api/webhooks/..."
+			value="{{ config.get('discord_webhook_url', '') }}">
+		<small class="form-text text-muted">Stored in the CTFd database; visible to admins only.</small>
+	</div>
+
+	<div class="form-group">
+		<label>When to announce</label>
+		<select class="form-control custom-select" name="discord_scope">
+			<option value="first_blood" {% if config.get("discord_scope") == "first_blood" %}selected{% endif %}>First blood only</option>
+			<option value="first_n" {% if config.get("discord_scope") == "first_n" %}selected{% endif %}>First N solves</option>
+			<option value="all" {% if config.get("discord_scope") == "all" %}selected{% endif %}>Every solve</option>
+		</select>
+	</div>
+
+	<div class="form-group">
+		<label>N <span class="text-muted">(used when "First N solves" is selected)</span></label>
+		<input type="number" min="1" class="form-control" name="discord_first_n"
+			value="{{ config.get('discord_first_n', '3') }}">
+	</div>
+
+	<div class="form-row">
+		<div class="form-group col-md-6">
+			<label>First-blood emoji</label>
+			<input type="text" class="form-control" name="discord_fb_emoji" value="{{ config.get('discord_fb_emoji', '') }}">
+			<small class="form-text text-muted">Unicode (🩸) or a Discord custom emoji like &lt;:blood:123456789&gt;.</small>
+		</div>
+		<div class="form-group col-md-6">
+			<label>Solve emoji</label>
+			<input type="text" class="form-control" name="discord_solve_emoji" value="{{ config.get('discord_solve_emoji', '') }}">
+		</div>
+	</div>
+
+	<div class="form-row">
+		<div class="form-group col-md-6">
+			<label>First-blood title</label>
+			<input type="text" class="form-control" name="discord_fb_title" value="{{ config.get('discord_fb_title', '') }}">
+		</div>
+		<div class="form-group col-md-6">
+			<label>Solve title</label>
+			<input type="text" class="form-control" name="discord_solve_title" value="{{ config.get('discord_solve_title', '') }}">
+		</div>
+	</div>
+
+	<div class="form-group">
+		<label>Message template</label>
+		<textarea class="form-control" name="discord_message_template" rows="2">{{ config.get('discord_message_template', '') }}</textarea>
+		<small class="form-text text-muted">
+			Placeholders: {emoji} {name} {user} {team} {challenge} {category} {value} {score} {place} {solves}
+		</small>
+	</div>
+
+	<div class="form-group">
+		<label>Show challenge / category / points as embed fields</label>
+		<select class="form-control custom-select" name="discord_show_fields">
+			<option value="true" {% if config.get("discord_show_fields") == "true" %}selected{% endif %}>Yes</option>
+			<option value="false" {% if config.get("discord_show_fields") != "true" %}selected{% endif %}>No</option>
+		</select>
+	</div>
+
+	<input type="hidden" value="{{ Session.nonce }}" name="nonce" id="nonce" />
+	<button type="submit" name="action" value="save" class="btn btn-md btn-primary">Save settings</button>
+	<button type="submit" name="action" value="test" class="btn btn-md btn-secondary float-right">Send test message</button>
+</form>
